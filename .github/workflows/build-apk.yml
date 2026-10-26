@@ -19,15 +19,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
           cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | sdkmanager --licenses 2>/dev/null || true
 
       - name: Setup Environment Files
         run: |
@@ -47,22 +51,17 @@ jobs:
       - name: Grant Execute Permission to Gradle Wrapper
         run: chmod +x gradlew
 
-      - name: Build Optimized Release & Debug APK
-        run: ./gradlew :app:assembleRelease :app:assembleDebug --no-daemon
+      - name: Build Optimized Release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
       - name: Package Artifacts
         run: |
           mkdir -p output_apk
-          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
-            cp app/build/outputs/apk/release/app-release.apk output_apk/AlEzzi-Grocery-POS-Release.apk
-          fi
-          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
-            cp app/build/outputs/apk/debug/app-debug.apk output_apk/AlEzzi-Grocery-POS-Debug.apk
-          fi
+          find app/build/outputs/apk -type f -name "*.apk" -exec cp {} output_apk/AlEzzi-Grocery-POS-v1.0.apk \;
 
-      - name: Upload APK Artifacts
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AlEzzi-Grocery-POS
-          path: output_apk/*.apk
+          name: AlEzzi-Grocery-POS-v1.0
+          path: output_apk/AlEzzi-Grocery-POS-v1.0.apk
           retention-days: 30
