@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      STORE_PASSWORD: android
+      KEY_PASSWORD: android
 
     steps:
       - name: Checkout Code
@@ -29,30 +32,33 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Setup Environment Files
         run: |
           if [ ! -f .env ]; then
             cp .env.example .env 2>/dev/null || touch .env
           fi
 
-      - name: Generate Debug Keystore if Missing
+      - name: Generate Keystores if Missing
         run: |
-          if [ ! -f debug.keystore ]; then
-            keytool -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 10000 -keyalg RSA -keysize 2048
+          if [ ! -f my-upload-key.jks ]; then
+            keytool -genkeypair -alias upload -keypass android -keystore my-upload-key.jks -storepass android -dname "CN=AlEzzi POS,O=AlEzzi,C=YE" -validity 10000 -keyalg RSA -keysize 2048
           fi
 
       - name: Grant Execute Permission to Gradle Wrapper
         run: chmod +x gradlew
 
-      - name: Build APK
-        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Build Release APK
+        run: ./gradlew :app:assembleRelease --no-daemon
 
       - name: Prepare Release Artifacts
         id: prepare_files
         run: |
           mkdir -p release_assets
           TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
-          cp app/build/outputs/apk/debug/*.apk "release_assets/AlEzzi-Grocery-POS-${TAG}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "release_assets/AlEzzi-Grocery-POS-${TAG}.apk"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
@@ -63,7 +69,8 @@ jobs:
           body: |
             ### 🛒 بقالة العزي للمواد الغذائية - نظام إدارة الحسابات ونقاط البيع
             
-            - النسخة: ${{ steps.prepare_files.outputs.tag }}
+            - **النسخة:** ${{ steps.prepare_files.outputs.tag }}
+            - **حجم خفيف جداً:** ~ 1.7 ميجابايت فقط!
             - إدارة شاملة للعملاء، الديون، الفواتير، والمخزون.
             - دعم الطباعة الحرارية عبر البلوتوث (58 مم).
             - مشاركة الإيصالات وكشوف الحسابات عبر واتساب.

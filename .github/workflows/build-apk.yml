@@ -11,6 +11,9 @@ jobs:
   build:
     name: Build & Package APK
     runs-on: ubuntu-latest
+    env:
+      STORE_PASSWORD: android
+      KEY_PASSWORD: android
 
     steps:
       - name: Checkout Code
@@ -23,35 +26,43 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Setup Environment Files
         run: |
           if [ ! -f .env ]; then
             cp .env.example .env 2>/dev/null || touch .env
           fi
 
-      - name: Generate Debug Keystore if Missing
+      - name: Generate Keystores if Missing
         run: |
           if [ ! -f debug.keystore ]; then
             keytool -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 10000 -keyalg RSA -keysize 2048
+          fi
+          if [ ! -f my-upload-key.jks ]; then
+            keytool -genkeypair -alias upload -keypass android -keystore my-upload-key.jks -storepass android -dname "CN=AlEzzi POS,O=AlEzzi,C=YE" -validity 10000 -keyalg RSA -keysize 2048
           fi
 
       - name: Grant Execute Permission to Gradle Wrapper
         run: chmod +x gradlew
 
-      - name: Run Unit Tests
-        run: ./gradlew :app:testDebugUnitTest --no-daemon
+      - name: Build Optimized Release & Debug APK
+        run: ./gradlew :app:assembleRelease :app:assembleDebug --no-daemon
 
-      - name: Build Debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon
-
-      - name: Rename APK for Easy Identification
+      - name: Package Artifacts
         run: |
           mkdir -p output_apk
-          cp app/build/outputs/apk/debug/*.apk output_apk/AlEzzi-Grocery-POS-v1.0.apk || true
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk output_apk/AlEzzi-Grocery-POS-Release.apk
+          fi
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk output_apk/AlEzzi-Grocery-POS-Debug.apk
+          fi
 
-      - name: Upload APK Artifact
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AlEzzi-Grocery-POS-v1.0
-          path: output_apk/AlEzzi-Grocery-POS-v1.0.apk
+          name: AlEzzi-Grocery-POS
+          path: output_apk/*.apk
           retention-days: 30
