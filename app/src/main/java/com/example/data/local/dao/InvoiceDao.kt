@@ -50,6 +50,9 @@ interface InvoiceDao {
     @Query("UPDATE invoices SET isCancelled = 1 WHERE id = :invoiceId")
     suspend fun cancelInvoice(invoiceId: Long)
 
+    @Query("SELECT COUNT(*) FROM invoices")
+    suspend fun getInvoiceCount(): Int
+
     @Query("SELECT SUM(totalAmount) FROM invoices WHERE isCancelled = 0")
     fun getTotalSalesFlow(): Flow<BigDecimal?>
 
