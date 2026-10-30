@@ -16,3 +16,8 @@
 local.properties
 .env
 debug.keystore
+
+# مفاتيح توقيع التطبيق — لا تُرفع إلى المستودع أبداً (سرّية)
+*.jks
+*.keystore
+!debug.keystore

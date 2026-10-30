@@ -1,10 +1,18 @@
 package com.example
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -15,10 +23,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.example.data.backup.BackupManager
+import com.example.data.local.AppDatabase
 import com.example.data.local.dao.InvoiceWithCustomerAndItems
 import com.example.ui.screens.*
 import com.example.ui.theme.MyApplicationTheme
@@ -31,6 +42,22 @@ import kotlinx.coroutines.launch
 import java.math.BigDecimal
 
 class MainActivity : ComponentActivity() {
+
+    /** صورة إيصال بانتظار منح صلاحية البلوتوث لإكمال طباعتها */
+    private var pendingPrintBitmap: Bitmap? = null
+
+    private val bluetoothPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val bmp = pendingPrintBitmap
+        pendingPrintBitmap = null
+        if (granted && bmp != null) {
+            printReceiptViaBluetooth(bmp)
+        } else if (!granted) {
+            Toast.makeText(this, "تم رفض صلاحية البلوتوث، لا يمكن الطباعة", Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -52,6 +79,37 @@ class MainActivity : ComponentActivity() {
                 var showAddCustomerDialog by remember { mutableStateOf(false) }
                 var showAddProductDialog by remember { mutableStateOf(false) }
                 var selectedBottomTab by remember { mutableStateOf(0) }
+
+                // مدير النسخ الاحتياطي + منتقي ملفات الحفظ والاستعادة
+                val backupManager = remember { BackupManager(this@MainActivity, AppDatabase.getDatabase(this@MainActivity)) }
+                val backupLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.CreateDocument("application/zip")
+                ) { uri ->
+                    if (uri != null) {
+                        coroutineScope.launch {
+                            val result = backupManager.createBackup(uri)
+                            Toast.makeText(
+                                this@MainActivity,
+                                result.getOrNull() ?: "فشل النسخ الاحتياطي: ${result.exceptionOrNull()?.localizedMessage ?: "خطأ غير معروف"}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
+                val restoreLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument()
+                ) { uri ->
+                    if (uri != null) {
+                        coroutineScope.launch {
+                            val result = backupManager.restoreBackup(uri)
+                            Toast.makeText(
+                                this@MainActivity,
+                                result.getOrNull() ?: "فشلت الاستعادة: ${result.exceptionOrNull()?.localizedMessage ?: "خطأ غير معروف"}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
 
                 NavHost(navController = navController, startDestination = "customers_main") {
                     // Screen 1: شاشة العملاء الرئيسية
@@ -163,9 +221,14 @@ class MainActivity : ComponentActivity() {
                             preselectedCustomerId = customerId,
                             onBack = { navController.popBackStack() },
                             onSaveInvoice = { custId, items, disc, paid, type, notes, invNum ->
-                                viewModel.createInvoice(custId, items, disc, paid, type, notes, invNum)
-                                Toast.makeText(this@MainActivity, "تم حفظ الفاتورة بنجاح", Toast.LENGTH_SHORT).show()
-                                navController.popBackStack()
+                                coroutineScope.launch {
+                                    val newInvoiceId = viewModel.createInvoice(custId, items, disc, paid, type, notes, invNum)
+                                    Toast.makeText(this@MainActivity, "تم حفظ الفاتورة بنجاح", Toast.LENGTH_SHORT).show()
+                                    navController.popBackStack()
+                                    if (newInvoiceId > 0) {
+                                        navController.navigate("invoice_receipt_preview/$newInvoiceId")
+                                    }
+                                }
                             },
                             onPrintReceipt = { invId ->
                                 navController.navigate("invoice_receipt_preview/$invId")
@@ -189,29 +252,25 @@ class MainActivity : ComponentActivity() {
                             invoiceData = invoiceWithDetails,
                             onBack = { navController.popBackStack() },
                             onPrint = {
-                                coroutineScope.launch {
-                                    val dummyInv = invoiceWithDetails ?: InvoiceWithCustomerAndItems(
-                                        invoice = invoices.firstOrNull() ?: return@launch,
-                                        customer = customers.firstOrNull(),
-                                        items = emptyList()
-                                    )
-                                    val bmp = ReceiptGenerator.generateReceiptBitmap(this@MainActivity, dummyInv)
-                                    Toast.makeText(this@MainActivity, "جاري إرسال الإيصال للطابعة الحرارية 58مم عبر البلوتوث...", Toast.LENGTH_LONG).show()
+                                val details = invoiceWithDetails
+                                if (details == null) {
+                                    Toast.makeText(this@MainActivity, "لا توجد بيانات فاتورة للطباعة", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val bmp = ReceiptGenerator.generateReceiptBitmap(this@MainActivity, details)
+                                    printReceiptViaBluetooth(bmp)
                                 }
                             },
                             onShare = {
-                                coroutineScope.launch {
-                                    val dummyInv = invoiceWithDetails ?: InvoiceWithCustomerAndItems(
-                                        invoice = invoices.firstOrNull() ?: return@launch,
-                                        customer = customers.firstOrNull(),
-                                        items = emptyList()
-                                    )
-                                    val bmp = ReceiptGenerator.generateReceiptBitmap(this@MainActivity, dummyInv)
+                                val details = invoiceWithDetails
+                                if (details == null) {
+                                    Toast.makeText(this@MainActivity, "لا توجد بيانات فاتورة للمشاركة", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val bmp = ReceiptGenerator.generateReceiptBitmap(this@MainActivity, details)
                                     WhatsAppSharer.shareReceiptImage(
                                         this@MainActivity,
                                         bmp,
-                                        dummyInv.customer?.phone,
-                                        "فاتورة بقالة العزي رقم ${dummyInv.invoice.invoiceNumber}"
+                                        details.customer?.phone,
+                                        "فاتورة بقالة العزي رقم ${details.invoice.invoiceNumber}"
                                     )
                                 }
                             }
@@ -246,13 +305,13 @@ class MainActivity : ComponentActivity() {
                                 Toast.makeText(this@MainActivity, "بقالة العزي للمواد الغذائية - 776425052", Toast.LENGTH_SHORT).show()
                             },
                             onBluetoothPrinterClick = {
-                                Toast.makeText(this@MainActivity, "تم ربط الطابعة الحرارية ESC/POS 58مم بنجاح", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, "للطباعة: قم بإقران الطابعة الحرارية من إعدادات البلوتوث في الهاتف، ثم استخدم زر الطباعة في شاشة الإيصال", Toast.LENGTH_LONG).show()
                             },
                             onBackupClick = {
-                                Toast.makeText(this@MainActivity, "تم إنشاء النسخة الاحتياطية لقاعدة البيانات محلياً بنجاح", Toast.LENGTH_SHORT).show()
+                                backupLauncher.launch("alezzi_backup_${System.currentTimeMillis()}.zip")
                             },
                             onRestoreClick = {
-                                Toast.makeText(this@MainActivity, "قاعدة البيانات متصلة ومحدثة", Toast.LENGTH_SHORT).show()
+                                restoreLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
                             }
                         )
                     }
@@ -282,6 +341,41 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * طباعة الإيصال على أول طابعة مقترنة عبر البلوتوث.
+     * يطلب صلاحية BLUETOOTH_CONNECT أولاً على أندرويد 12 وما فوق.
+     */
+    @SuppressLint("MissingPermission")
+    private fun printReceiptViaBluetooth(bitmap: Bitmap) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingPrintBitmap = bitmap
+            bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            return
+        }
+        lifecycleScope.launch {
+            val adapter = BluetoothAdapter.getDefaultAdapter()
+            val printer = adapter?.bondedDevices?.firstOrNull()
+            if (printer == null) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "لا توجد طابعة مقترنة. قم بإقران الطابعة الحرارية من إعدادات البلوتوث في الهاتف أولاً",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@launch
+            }
+            Toast.makeText(this@MainActivity, "جاري الطباعة على ${printer.name}...", Toast.LENGTH_SHORT).show()
+            val result = ThermalPrinterService().printReceiptBitmap(printer.address, bitmap)
+            Toast.makeText(
+                this@MainActivity,
+                if (result.isSuccess) "تمت الطباعة بنجاح"
+                else "فشلت الطباعة: ${result.exceptionOrNull()?.localizedMessage ?: "خطأ غير معروف"}",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 }
